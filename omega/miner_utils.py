@@ -10,6 +10,7 @@ from omega.constants import MAX_VIDEO_LENGTH, FIVE_MINUTES, VALIDATOR_TIMEOUT
 from omega import video_utils
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import traceback
 import sqlite3
 import random
@@ -446,7 +447,12 @@ async def search_and_embed_videos(original_query: str, query: str, num_videos: i
     if len(video_metas) > num_videos:
       video_metas = video_metas[:num_videos]
     return video_metas, optimized_query
-    
+
+executor = ThreadPoolExecutor(max_workers=1)
+async def run_in_background(func, *args):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(executor, func, *args)
+
 async def process_clip(i, number_of_clips, clip_duration, offset, result, download_path, imagebind, subtitles, query, start_function, VALIDATOR_TIMEOUT, TIMEOUT_THRESHOLD, augmenter):
     clip_path = None
     try:
@@ -459,9 +465,7 @@ async def process_clip(i, number_of_clips, clip_duration, offset, result, downlo
         )
         #clip_path = video_utils.clip_video(download_path.name, start, end)
         
-        description = await asyncio.to_thread(
-            get_description_from_subtitles, result, imagebind, clip_path, subtitles, query
-        )
+        description = None
         #description = get_description_from_subtitles(result, imagebind, clip_path, subtitles, query)
         
         if (time.time() - start_function) > (VALIDATOR_TIMEOUT - TIMEOUT_THRESHOLD):
@@ -472,10 +476,8 @@ async def process_clip(i, number_of_clips, clip_duration, offset, result, downlo
         if not description or description == "":
             description = get_description(result, download_path, augmenter)
         
-        #embeddings = await asyncio.to_thread(
-        #    imagebind.embed, [description], [clip_path]
-        #)
-        embeddings = imagebind.embed([description], [clip_path])
+        embeddings = await run_in_background(imagebind.embed, [description], [clip_path])
+        #embeddings = imagebind.embed([description], [clip_path])
         
         video_meta = VideoMetadata(
             video_id=result.video_id,
@@ -490,7 +492,7 @@ async def process_clip(i, number_of_clips, clip_duration, offset, result, downlo
         return video_meta
     finally:
         if clip_path:
-            clip_path.close()    
+            clip_path.close()
     
 def check_video_scores(query, num_videos, video_metas):
     videos = Videos(query=query, num_videos=num_videos, video_metadata=video_metas)
