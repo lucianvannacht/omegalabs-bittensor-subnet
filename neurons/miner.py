@@ -56,7 +56,7 @@ class Miner(BaseMinerNeuron):
             raise ValueError("Invalid query augment")
         self.imagebind = ImageBind()
         
-        # self.concurrent_requests = 0
+        self.concurrent_requests = 0
 
     async def forward(
         self, synapse: omega.protocol.Videos
@@ -73,9 +73,12 @@ class Miner(BaseMinerNeuron):
           update_query_augment(query_to_use)
           bt.logging.info(f"Found augmented query in db: {query_to_use}")
    
-        synapse.video_metadata = await search_and_embed_videos(
-            query_to_use, synapse.num_videos, self.imagebind, start, self.augment
+        synapse.video_metadata, optimized_query = await search_and_embed_videos(
+            synapse.query, query_to_use, synapse.num_videos, self.imagebind, start, self.augment
         )
+        if optimized_query is not None and optimized_query != "":
+          synapse.query = optimized_query
+        bt.logging.info(f"Submitting optimized query: {synapse.query}")
         time_elapsed = time.time() - start
         if len(synapse.video_metadata) == synapse.num_videos and time_elapsed < VALIDATOR_TIMEOUT:
             bt.logging.info(f"–––––– SCRAPING SUCCEEDED: Scraped {len(synapse.video_metadata)}/{synapse.num_videos} videos in {time_elapsed} seconds.")
@@ -83,7 +86,7 @@ class Miner(BaseMinerNeuron):
             bt.logging.error(f"–––––– SCRAPING FAILED: Scraped {len(synapse.video_metadata)}/{synapse.num_videos} videos in {time_elapsed} seconds.")
         
         # request is complete, reduce concurrency count
-        # self.concurrent_requests -= 1
+        #self.concurrent_requests -= 1
         return synapse
 
     async def blacklist(
@@ -142,11 +145,11 @@ class Miner(BaseMinerNeuron):
           return True, "Not even staked TAO"
         
         # if too many concurrent requests, pass. Right now only doing 2 at a time.
-        # if self.concurrent_requests >= 2:
-          bt.logging.warning(f"Too many concurrent requests, passing on this validator request.")
-          return True, "Too many concurrent requests, passing."
+        #if self.concurrent_requests >= 2:
+        #  bt.logging.warning(f"Too many concurrent requests, passing on this validator request.")
+        #  return True, "Too many concurrent requests, passing."
         # let's keep track of how many concurrent requests we're handling.
-        # self.concurrent_requests += 1
+        #self.concurrent_requests += 1
         
         bt.logging.trace(
             f"Not Blacklisting recognized hotkey {synapse.dendrite.hotkey}"

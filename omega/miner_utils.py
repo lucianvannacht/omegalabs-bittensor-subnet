@@ -22,6 +22,10 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+# toggle to optimize queries or not
+OPTIMIZE_QUERIES = False
+# toggle to turn on description similarity checks
+DO_DESCRIPTION_SIMILARITY = False
 # cosign_similarity threshold. We want similarities at or above this number.
 SIMILARITY_THRESHOLD = 0.25
 # threshold for validator timeout. if we're within this many seconds, abort our loops and send back what we have 
@@ -55,7 +59,6 @@ conn.close()
 def check_query_augment(augment, max_count=3):
     conn = sqlite3.connect(db_filename_queries)
     cursor = conn.cursor()
-	# SQL query to check for the existence of the youtube_id
     query = 'SELECT EXISTS(SELECT 1 FROM queries WHERE augment=? AND count >= ? LIMIT 1)'
     cursor.execute(query, (augment,max_count))
     # Fetch the result
@@ -68,7 +71,6 @@ def check_query_augment(augment, max_count=3):
 def find_query_augment(search_query, max_count=3):
     conn = sqlite3.connect(db_filename_queries)
     cursor = conn.cursor()
-	# SQL query to check for the existence of the youtube_id
     query = 'SELECT augment FROM queries WHERE query=? AND count < ? ORDER BY count ASC LIMIT 1'
     cursor.execute(query, (search_query,max_count))
     # Fetch the result
@@ -76,6 +78,17 @@ def find_query_augment(search_query, max_count=3):
     conn.close()
     # Check if result is not None, then return the augment value, otherwise return False
     return augment[0] if augment else False
+    
+# find query augments based on search_query. return limit rows
+def find_query_augments(search_query, search_augment, limit=5):
+    conn = sqlite3.connect(db_filename_queries)
+    cursor = conn.cursor()
+    query = f"SELECT augment FROM queries WHERE query=? AND augment != ? ORDER BY RANDOM() LIMIT ?"
+    cursor.execute(query, (search_query, search_augment, limit))
+    # Fetch the result and extract the first element from each tuple
+    augments = [item[0] for item in cursor.fetchall()]
+    conn.close()
+    return augments
     
 def update_query_augment(augment):
     conn = sqlite3.connect(db_filename_queries)
@@ -214,7 +227,8 @@ def get_description(yt: video_utils.YoutubeDL, video_path: str, augmenter) -> st
     
 def get_description_from_subtitles(yt, imagebind, clip_path, subtitles, query):
     description = yt.title
-    if len(subtitles) > 0:
+    
+    if DO_DESCRIPTION_SIMILARITY and len(subtitles) > 0:
         # Preprocess and tokenize subtitles
         preprocessed_subtitles = preprocess_subtitles(subtitles, yt.title, query)
 
@@ -224,7 +238,7 @@ def get_description_from_subtitles(yt, imagebind, clip_path, subtitles, query):
 
         # Embed the video once
         with torch.no_grad():  # Ensure no gradients are computed
-            video_embedding = imagebind.embed([description], [clip_path]).video[0].detach()
+            video_embedding = imagebind.embed([""], [clip_path]).video[0].detach()
 
         # Calculate cosine similarity between video embedding and subtitle descriptions
         similarities = F.cosine_similarity(video_embedding.unsqueeze(0), subtitle_embeddings, dim=1)
@@ -236,12 +250,10 @@ def get_description_from_subtitles(yt, imagebind, clip_path, subtitles, query):
         if similarities[most_similar_index] >= SIMILARITY_THRESHOLD:
           # Append the most similar preprocessed subtitle to the description
           description = preprocessed_subtitles[most_similar_index]
-          bt.logging.info(f"Submitting cosine_similar description with cosign_similarity of {similarities[most_similar_index]}")
+          bt.logging.info(f"Submitting description with cosign_similarity of {similarities[most_similar_index]}")
         else:
           description = "SKIPCLIP"
           bt.logging.info(f"cosign_similarity of {similarities[most_similar_index]} is below {SIMILARITY_THRESHOLD} threshold skipping.")
-        
-        return description
 
     return description
     
@@ -272,6 +284,35 @@ def preprocess_subtitles(subtitles, video_title, query):
     preprocessed_subtitles.append(query)
     preprocessed_subtitles.append(video_title + ". " + query)
     return preprocessed_subtitles
+    
+def get_optimized_query(original_query, query, video_metas, imagebind):
+    # get 5 random augments for the original query
+    queries = find_query_augments(original_query, query, limit=5)
+    queries.append(original_query)
+    queries.append(query)
+    # create embeddings of the query permutations
+    query_embeddings = imagebind.embed_text(queries).detach().to(imagebind.device)
+    video_embeddings = torch.stack([torch.tensor(v.video_emb) for v in video_metas]).to(imagebind.device)
+    # Normalize the embeddings to have unit length
+    query_embeddings = F.normalize(query_embeddings, p=2, dim=1)
+    video_embeddings = F.normalize(video_embeddings, p=2, dim=1)
+    
+    # Compute the cosine similarity matrix
+    similarity_matrix = torch.mm(video_embeddings, query_embeddings.t())
+
+    # Aggregate the similarities for each query across all videos
+    # Here we sum the similarities, but you could also use mean()
+    query_similarities = similarity_matrix.sum(dim=0)
+
+    # Find the index of the query with the highest total similarity
+    most_similar_query_index = query_similarities.argmax().item()
+    optimized_query = queries[most_similar_query_index]
+    similarity_score = query_similarities[most_similar_query_index].item()
+
+    # Log the most similar query and its aggregated similarity score
+    bt.logging.info(f"Submitting query most similar to all videos with a total cosine similarity of {similarity_score}: {optimized_query}")
+    
+    return optimized_query
 
 def get_relevant_timestamps(query: str, yt: video_utils.YoutubeDL, video_path: str) -> Tuple[int, int]:
     """
@@ -286,7 +327,7 @@ def get_relevant_timestamps(query: str, yt: video_utils.YoutubeDL, video_path: s
     return start_time, end_time
 
 
-async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageBind, start_function, augmenter) -> List[VideoMetadata]:
+async def search_and_embed_videos(original_query: str, query: str, num_videos: int, imagebind: ImageBind, start_function, augmenter) -> List[VideoMetadata]:
     """
     Search YouTube for videos matching the given query and return a list of VideoMetadata objects.
 
@@ -360,46 +401,20 @@ async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageB
                       number_of_clips = 1
 
                     # Loop to create each clip
+                    tasks = []
                     for i in range(number_of_clips):
-                      try:
-                        clip_path = None
-                        #start, end = get_relevant_timestamps(query, result, download_path)
-                        start = i * clip_duration + offset
-                        end = start + clip_duration
-                        
-                        #description = get_description(result, download_path, augmenter)
-                        bt.logging.info(f"Creating {clip_duration}s clip of video {result.video_id} -- from {start}s to {end}s")
-                        clip_path = video_utils.clip_video(download_path.name, start, end)
-                        description = get_description_from_subtitles(result, imagebind, clip_path, subtitles, query)
-                        if (time.time() - start_function) > (VALIDATOR_TIMEOUT - TIMEOUT_THRESHOLD):
-                          bt.logging.info(f"Within {TIMEOUT_THRESHOLD} seconds of VALIDATOR_TIMEOUT, breaking loop. {(time.time() - start_function)}s > {(VALIDATOR_TIMEOUT - TIMEOUT_THRESHOLD)}s")
-                          break
-                        # if we return "SKIPCLIP" as the description, skip this clip and move on
-                        if description == "SKIPCLIP":
-                          continue
-                        if not description or description == "":
-                          description = get_description(result, download_path, augmenter)
-                        embeddings = imagebind.embed([description], [clip_path])
-                        video_metas.append(VideoMetadata(
-                            video_id=result.video_id,
-                            description=description,
-                            views=result.views,
-                            start_time=start,
-                            end_time=end,
-                            video_emb=embeddings.video[0].tolist(),
-                            audio_emb=embeddings.audio[0].tolist(),
-                            description_emb=embeddings.description[0].tolist(),
-                        ))
-                        if (time.time() - start_function) > (VALIDATOR_TIMEOUT - TIMEOUT_THRESHOLD):
-                          bt.logging.info(f"Within {TIMEOUT_THRESHOLD} seconds of VALIDATOR_TIMEOUT, breaking loop. {(time.time() - start_function)}s > {(VALIDATOR_TIMEOUT - TIMEOUT_THRESHOLD)}s")
-                          break
-                      finally:
-                        #bt.logging.info(f"Finished creating clip")
-                        if clip_path:
-                          clip_path.close()
-                        if len(video_metas) == num_videos:
-                          break
-                      
+                        task = process_clip(i, number_of_clips, clip_duration, offset, result, download_path, imagebind, subtitles, query, start_function, VALIDATOR_TIMEOUT, TIMEOUT_THRESHOLD, augmenter)
+                        tasks.append(task)
+                        if len(tasks) >= num_videos:
+                            break
+
+                    # Await the tasks and extend video_metas with the new results
+                    new_video_metas = await asyncio.gather(*tasks)
+                    new_video_metas = [meta for meta in new_video_metas if meta is not None]
+                    video_metas.extend(new_video_metas)
+                    if len(video_metas) >= num_videos:
+                      break
+                              
                 finally:
                     download_path.close()
                     if clip_path:
@@ -422,7 +437,60 @@ async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageB
 
     # run our video_metas through the score checker
     #video_metas = check_video_scores(query, len(video_metas), video_metas)
-    return video_metas
+    
+    # find the most optimal query for our videos
+    optimized_query = None
+    if OPTIMIZE_QUERIES and len(video_metas) > 0:
+      optimized_query = get_optimized_query(original_query, query, video_metas, imagebind)
+    
+    if len(video_metas) > num_videos:
+      video_metas = video_metas[:num_videos]
+    return video_metas, optimized_query
+    
+async def process_clip(i, number_of_clips, clip_duration, offset, result, download_path, imagebind, subtitles, query, start_function, VALIDATOR_TIMEOUT, TIMEOUT_THRESHOLD, augmenter):
+    clip_path = None
+    try:
+        start = i * clip_duration + offset
+        end = start + clip_duration
+        bt.logging.info(f"Creating {clip_duration}s clip of video {result.video_id} -- from {start}s to {end}s")
+        
+        clip_path = await asyncio.to_thread(
+            video_utils.clip_video, download_path.name, start, end
+        )
+        #clip_path = video_utils.clip_video(download_path.name, start, end)
+        
+        description = await asyncio.to_thread(
+            get_description_from_subtitles, result, imagebind, clip_path, subtitles, query
+        )
+        #description = get_description_from_subtitles(result, imagebind, clip_path, subtitles, query)
+        
+        if (time.time() - start_function) > (VALIDATOR_TIMEOUT - TIMEOUT_THRESHOLD):
+            bt.logging.info(f"Within {TIMEOUT_THRESHOLD} seconds of VALIDATOR_TIMEOUT, breaking loop. {(time.time() - start_function)}s > {(VALIDATOR_TIMEOUT - TIMEOUT_THRESHOLD)}s")
+            return None
+        if description == "SKIPCLIP":
+            return None
+        if not description or description == "":
+            description = get_description(result, download_path, augmenter)
+        
+        #embeddings = await asyncio.to_thread(
+        #    imagebind.embed, [description], [clip_path]
+        #)
+        embeddings = imagebind.embed([description], [clip_path])
+        
+        video_meta = VideoMetadata(
+            video_id=result.video_id,
+            description=description,
+            views=result.views,
+            start_time=start,
+            end_time=end,
+            video_emb=embeddings.video[0].tolist(),
+            audio_emb=embeddings.audio[0].tolist(),
+            description_emb=embeddings.description[0].tolist(),
+        )
+        return video_meta
+    finally:
+        if clip_path:
+            clip_path.close()    
     
 def check_video_scores(query, num_videos, video_metas):
     videos = Videos(query=query, num_videos=num_videos, video_metadata=video_metas)
