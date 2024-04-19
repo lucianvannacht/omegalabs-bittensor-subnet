@@ -52,38 +52,20 @@ class Miner(BaseMinerNeuron):
         else:
             raise ValueError("Invalid query augment")
         self.imagebind = ImageBind()
-        
-        self.concurrent_requests = 0
 
     async def forward(
         self, synapse: omega.protocol.Videos
     ) -> omega.protocol.Videos:
         bt.logging.info(f"Received scraping request: {synapse.num_videos} videos for query '{synapse.query}'")
         start = time.time()
-        
-        # check to see if we have an augment ready to use for this query
-        query_to_use = find_query_augment(synapse.query)
-        if (not query_to_use):
-          query_to_use = self.augment(synapse.query)
-        else:
-          # if we found one in the db, increment the use count
-          update_query_augment(query_to_use)
-          bt.logging.info(f"Found augmented query in db: {query_to_use}")
-   
-        synapse.video_metadata, optimized_query = await search_and_embed_videos(
-            synapse.query, query_to_use, synapse.num_videos, self.imagebind, start, self.augment
+        synapse.video_metadata = search_and_embed_videos(
+            self.augment(synapse.query), synapse.num_videos, self.imagebind
         )
-        if optimized_query is not None and optimized_query != "":
-          synapse.query = optimized_query
-        bt.logging.info(f"Submitting optimized query: {synapse.query}")
         time_elapsed = time.time() - start
         if len(synapse.video_metadata) == synapse.num_videos and time_elapsed < VALIDATOR_TIMEOUT:
             bt.logging.info(f"–––––– SCRAPING SUCCEEDED: Scraped {len(synapse.video_metadata)}/{synapse.num_videos} videos in {time_elapsed} seconds.")
         else:
             bt.logging.error(f"–––––– SCRAPING FAILED: Scraped {len(synapse.video_metadata)}/{synapse.num_videos} videos in {time_elapsed} seconds.")
-        
-        # request is complete, reduce concurrency count
-        #self.concurrent_requests -= 1
         return synapse
 
     async def blacklist(
@@ -136,18 +118,7 @@ class Miner(BaseMinerNeuron):
                     f"Blacklisting a request from non-validator hotkey {synapse.dendrite.hotkey}"
                 )
                 return True, "Non-validator hotkey"
-        
-        if self.metagraph.S[uid] < 1000:
-          bt.logging.warning(f"Ignoring request from validator/uid with less than 1000 TAO staked.")
-          return True, "Not even staked TAO"
-        
-        # if too many concurrent requests, pass. Right now only doing 2 at a time.
-        #if self.concurrent_requests >= 2:
-        #  bt.logging.warning(f"Too many concurrent requests, passing on this validator request.")
-        #  return True, "Too many concurrent requests, passing."
-        # let's keep track of how many concurrent requests we're handling.
-        #self.concurrent_requests += 1
-        
+
         bt.logging.trace(
             f"Not Blacklisting recognized hotkey {synapse.dendrite.hotkey}"
         )
