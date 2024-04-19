@@ -30,9 +30,6 @@ from omega.augment import LocalLLMAugment, OpenAIAugment, NoAugment
 from omega.utils.config import QueryAugment
 from omega.constants import VALIDATOR_TIMEOUT
 
-import json
-from omega.miner_utils import find_query_augment, insert_query_augments, check_query_augment, update_query_augment
-
 
 class Miner(BaseMinerNeuron):
     """
