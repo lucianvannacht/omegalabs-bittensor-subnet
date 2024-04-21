@@ -13,7 +13,7 @@ def clean_text(text):
     return text
 
 def get_llm_prompt(query: str) -> str:
-    return f"Take the given query `{query}` and augment it to be more detailed using keywords. Do not make it longer than 30 words."
+    return f"Take the given query `{query}` and augment it to be more detailed using keywords. Do not make it longer than 10 words."
 def get_llm_json_prompt(query: str) -> str:
     return f"Take the given query `{query}` and give me a list of 10 variations. Each variation should be augmented to have tangentially related items. For example, use synonyms, hyperbole, add specific names and types. Do not make any variation longer than 8 words. Return the list of variations in JSON"    
     
