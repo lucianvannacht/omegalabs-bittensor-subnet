@@ -114,7 +114,6 @@ async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageB
     
     video_metas = []
     # fetch random proxy ip
-    #proxy_url = random.choice(proxy_urls)
     proxy_url = random.choice(proxy_urls)
     print("proxy_url:", proxy_url)
     try:
