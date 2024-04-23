@@ -59,7 +59,7 @@ class Miner(BaseMinerNeuron):
         bt.logging.info(f"Received scraping request: {synapse.num_videos} videos for query '{synapse.query}'")
         start = time.time()
         synapse.video_metadata = await search_and_embed_videos(
-            self.augment(synapse.query), synapse.num_videos, self.imagebind
+            self.augment(synapse.query), synapse.num_videos, self.imagebind, start
         )
         time_elapsed = time.time() - start
         if len(synapse.video_metadata) == synapse.num_videos and time_elapsed < VALIDATOR_TIMEOUT:
