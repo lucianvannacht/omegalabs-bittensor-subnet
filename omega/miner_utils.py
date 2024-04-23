@@ -114,8 +114,12 @@ async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageB
     
     video_metas = []
     # fetch random proxy ip
-    proxy_url = random.choice(proxy_urls)
-    print("proxy_url:", proxy_url)
+    if len(PROXY_URLS):
+        proxy_url = random.choice(PROXY_URLS)
+        bt.logging.info("proxy_url:", proxy_url)
+    else:
+        proxy_url = None
+
     try:
         # take the first N that we need
         loop = asyncio.get_event_loop()
