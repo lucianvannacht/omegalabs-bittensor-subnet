@@ -6,7 +6,7 @@ import bittensor as bt
 
 from omega.protocol import VideoMetadata
 from omega.imagebind_wrapper import ImageBind
-from omega.constants import MAX_VIDEO_LENGTH, FIVE_MINUTES
+from omega.constants import MAX_VIDEO_LENGTH, FIVE_MINUTES, VALIDATOR_TIMEOUT
 from omega import video_utils
 
 import asyncio
@@ -88,7 +88,7 @@ with open(PROXY_FILENAME, 'r') as file:
         if proxy_url != "":
             PROXY_URLS.append(proxy_url)
 
-async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageBind) -> List[VideoMetadata]:
+async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageBind, start_function: float) -> List[VideoMetadata]:
     """
     Search YouTube for videos matching the given query and return a list of VideoMetadata objects.
 
@@ -100,7 +100,7 @@ async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageB
         List[VideoMetadata]: A list of VideoMetadata objects representing the search results.
     """
     # fetch more videos than we need
-    results = video_utils.search_videos(query, max_results=int(num_videos * 100))
+    results = video_utils.search_videos(query, max_results=int(num_videos * 50))
     # Filter out results that are already in the database
     filtered_results = []
     found_count = 0
@@ -114,12 +114,9 @@ async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageB
     
     video_metas = []
     # fetch random proxy ip
-    if len(PROXY_URLS):
-        proxy_url = random.choice(PROXY_URLS)
-        bt.logging.info("proxy_url:", proxy_url)
-    else:
-        proxy_url = None
-
+    #proxy_url = random.choice(proxy_urls)
+    proxy_url = random.choice(proxy_urls)
+    print("proxy_url:", proxy_url)
     try:
         # take the first N that we need
         loop = asyncio.get_event_loop()
@@ -151,9 +148,19 @@ async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageB
                     result.length = video_utils.get_video_duration(download_path.name)
                     bt.logging.info(f"Downloaded video {result.video_id} ({min(result.length, FIVE_MINUTES)}) in {time.time() - start} seconds")
                     start, end = get_relevant_timestamps(query, result, download_path)
-                    description = get_description(result, download_path)
+                    #description = get_description(result, download_path
+                    if (time.time() - start_function) > (VALIDATOR_TIMEOUT - 5):
+                    	bt.logging.info(f"Within 10 seconds of Validator_TIMEOUT, breaking loop. {(time.time() - start_function)}s > {(VALIDATOR_TIMEOUT - 10)}s")
+                    	break
                     clip_path = video_utils.clip_video(download_path.name, start, end)
+                    if (time.time() - start_function) > (VALIDATOR_TIMEOUT - 5):
+                    	bt.logging.info(f"Within 10 seconds of Validator_TIMEOUT, breaking loop. {(time.time() - start_function)}s > {(VALIDATOR_TIMEOUT - 10)}s")
+                    	break                   
+                    description = get_description(result, download_path)
                     embeddings = imagebind.embed([description], [clip_path])
+                    if (time.time() - start_function) > (VALIDATOR_TIMEOUT - 5):
+                    	bt.logging.info(f"Within 10 seconds of Validator_TIMEOUT, breaking loop. {(time.time() - start_function)}s > {(VALIDATOR_TIMEOUT - 10)}s")
+                    	break  
                     video_metas.append(VideoMetadata(
                         video_id=result.video_id,
                         description=description,
@@ -178,7 +185,9 @@ async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageB
                     
                 if len(video_metas) == num_videos:
                     break
-
+                if (time.time() - start_function) > (VALIDATOR_TIMEOUT - 5):
+                    bt.logging.info(f"Within 10 seconds of Validator_TIMEOUT, breaking loop. {(time.time() - start_function)}s > {(VALIDATOR_TIMEOUT - 10)}s")
+                    break  
     except Exception as e:
         bt.logging.error(f"Error searching for videos: {e}")
         # Log the stack trace
