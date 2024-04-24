@@ -100,7 +100,7 @@ async def search_and_embed_videos(query: str, num_videos: int, imagebind: ImageB
         List[VideoMetadata]: A list of VideoMetadata objects representing the search results.
     """
     # fetch more videos than we need
-    results = video_utils.search_videos(query, max_results=int(num_videos * 50))
+    results = video_utils.search_videos(query, max_results=int(num_videos * 100))
     # Filter out results that are already in the database
     filtered_results = []
     found_count = 0
