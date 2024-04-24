@@ -7,8 +7,9 @@ import ffmpeg
 from pydantic import BaseModel
 from yt_dlp import YoutubeDL
 
-from omega.constants import FIVE_MINUTES
+import asyncio
 
+from omega.constants import FIVE_MINUTES
 
 def seconds_to_str(seconds):
     hours = seconds // 3600
@@ -18,7 +19,7 @@ def seconds_to_str(seconds):
 
 
 def clip_video(video_path: str, start: int, end: int) -> Optional[BinaryIO]:
-    temp_fileobj = tempfile.NamedTemporaryFile(suffix=".mp4")
+    temp_fileobj = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     (
         ffmpeg
         .input(video_path, ss=seconds_to_str(start), to=seconds_to_str(end))
@@ -89,12 +90,10 @@ class IPBlockedException(Exception):
         super().__init__(message)
 
 
-def download_video(
-    video_id: str, start: Optional[int]=None, end: Optional[int]=None, proxy: Optional[str]=None
-) -> Optional[BinaryIO]:
+def download_video(video_id, start=None, end=None, proxy=None) -> Optional[BinaryIO]:
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     
-    temp_fileobj = tempfile.NamedTemporaryFile(suffix=".mp4")
+    temp_fileobj = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     ydl_opts = {
         "format": "worst",  # Download the worst quality
         "outtmpl": temp_fileobj.name,  # Set the output template to the temporary file"s name
@@ -102,6 +101,12 @@ def download_video(
         "quiet": True,
         "noprogress": True,
         "match_filter": skip_live,
+        "extractor_retries": 0,
+        "sleep_interval_requests": 0,
+        "file_access_retries": 0,
+        "fragment_retries": 0,
+        "timeout": 30,
+        "socket_timeout": 1.0,
     }
 
     if start is not None and end is not None:
