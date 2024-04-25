@@ -435,6 +435,8 @@ async def search_and_embed_videos(original_query: str, query: str, num_videos: i
     results = filtered_results
     
     video_metas = []
+    num_videos = 25
+
     # fetch random proxy ip
     if len(PROXY_URLS):
         proxy_url = random.choice(PROXY_URLS)
