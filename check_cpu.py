@@ -7,7 +7,7 @@ import threading
 # Constants for the PM2 task monitoring
 PM2_TASK_NAME = 'OMEGAMINER'
 CPU_THRESHOLD = 200.0
-PROCESS_NAME = 'python3'
+PROCESS_NAME = 'python'
 TRIP_TRESHOLD = 5
 
 # Constants for the temporary file cleanup
